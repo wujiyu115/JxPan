@@ -1,0 +1,12 @@
+.git
+.github
+.gitattributes
+data
+PyTool
+README.md
+LICENSE
+docker-compose.yml
+.env
+.env.example
+*.log
+node_modules

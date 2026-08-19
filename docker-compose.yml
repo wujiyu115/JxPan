@@ -1,0 +1,65 @@
+services:
+  jxpan:
+    image: wujiyu115/jxpan:latest
+    # 想本地自己构建就把上面一行注释掉，取消下面两行注释
+    # build: .
+    container_name: jxpan
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    volumes:
+      # SQLite 数据库落在这里，备份整个目录即可
+      - ./data:/data
+    environment:
+      # ---- 后台管理面板（不填则 /admin 不可用）----
+      admin: ${ADMIN_USER:-admin}
+      pass: ${ADMIN_PASS:-admin}
+
+      # ---- 群晖/威联通等 NAS 上 ./data 属主对不上时改这两个 ----
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+
+      # ---- 挂在反代后面时保持 true，否则生成的短链会指向内网地址 ----
+      TRUST_PROXY: "true"
+
+      # ---- Aria2 / RPC 推送（也可在页面右下角「⚙ Aria2」里填）----
+      ARIA2_RPC_URL: ${ARIA2_RPC_URL:-}
+      ARIA2_RPC_TOKEN: ${ARIA2_RPC_TOKEN:-}
+      ARIA2_DIR: ${ARIA2_DIR:-}
+      # auto（默认，能直推就直推）/ direct / jxpan
+      ARIA2_PUSH_MODE: ${ARIA2_PUSH_MODE:-auto}
+      # 可选，仅退回 JxPan 链接时用到；aria2 在别的容器时不能是 127.0.0.1
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      # /_host/rpc/* 需要先在 /admin 登录，仅可信内网才关
+      RPC_REQUIRE_ADMIN: "true"
+      # 隐藏页面上的「生成短链」按钮（后端路由和旧短链不受影响）
+      HIDE_SHORT_LINK: "true"
+
+      # ---- 安全：未带管理员 cookie 时不返回网盘凭据明文 ----
+      PROTECT_CREDENTIALS: "true"
+
+      # ---- 出站代理（可选，留空即直连）----
+      # 配了代理必须同时开 NODE_USE_ENV_PROXY=1，否则 Node 的 fetch 会忽略它。
+      # NO_PROXY 不支持网段写法，要写具体 IP / 域名后缀。详见 .env.example
+      NODE_USE_ENV_PROXY: ${NODE_USE_ENV_PROXY:-}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-127.0.0.1,localhost}
+      # 企业网自签根证书时打开（或用 NODE_EXTRA_CA_CERTS 指定 PEM）
+      NODE_USE_SYSTEM_CA: ${NODE_USE_SYSTEM_CA:-}
+
+      # ---- 网盘凭据全部可选，推荐用 /admin 扫码登录写入数据库 ----
+      # 完整清单见 .env.example
+      ALIYUN_AUTHORIZATION: ${ALIYUN_AUTHORIZATION:-}
+      QK_COOKIE: ${QK_COOKIE:-}
+      UC_COOKIE: ${UC_COOKIE:-}
+      MCLOUD_AUTHORIZATION: ${MCLOUD_AUTHORIZATION:-}
+      CLOUD189_TOKEN: ${CLOUD189_TOKEN:-}
+      PAN123_TOKEN: ${PAN123_TOKEN:-}
+      GY_Login: ${GY_Login:-}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8787/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3

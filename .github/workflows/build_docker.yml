@@ -1,0 +1,122 @@
+name: build_docker
+
+on:
+  push:
+    branches: [main]
+    # 只忽略纯文档改动。不用 paths 白名单 + tags 混写：
+    # tag push 的变更文件集为空，paths 过滤会让打 tag 时构建不触发。
+    paths-ignore:
+      - 'README.md'
+      - 'LICENSE'
+      - 'PyTool/**'
+      - '.env.example'
+      - 'docker-compose.yml'
+      - '.gitignore'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: jxpan
+
+jobs:
+  # 原生 amd64 上先跑自检和真实 HTTP 冒烟，比等 QEMU 构建完再失败快得多
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: 自检（D1 垫片 / MD5 补丁 / 加载 _worker.js）
+        run: npm test
+
+      - name: 启动服务并断言接口
+        env:
+          DB_PATH: ./data/jxpan.db
+          admin: ci
+          pass: ci
+        run: |
+          node src/server.mjs &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            curl -sf -o /dev/null http://127.0.0.1:8787/ && break
+            sleep 1
+          done
+
+          echo "--- GET / ---"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/)" = "200"
+
+          echo "--- GET /admin 应返回登录页 ---"
+          curl -s http://127.0.0.1:8787/admin | grep -q '后台登录'
+
+          echo "--- 登录后应返回管理面板 ---"
+          curl -s -X POST 'http://127.0.0.1:8787/admin?action=login' \
+            -H 'content-type: application/x-www-form-urlencoded' \
+            -d 'username=ci&password=ci' -c cookie.txt -o /dev/null
+          curl -s -b cookie.txt http://127.0.0.1:8787/admin | grep -q '后台管理面板'
+
+          echo "--- 统计接口应返回 JSON（验证 D1 读写）---"
+          curl -s -b cookie.txt 'http://127.0.0.1:8787/admin/?action=get_stats' | grep -q '"success":true'
+
+          echo "--- 注入脚本应被插进 HTML ---"
+          curl -s http://127.0.0.1:8787/ | grep -q '/_host/rpc/client.js'
+
+          echo "--- client.js 应以 js 类型返回 ---"
+          curl -s -D- -o /dev/null http://127.0.0.1:8787/_host/rpc/client.js | grep -qi 'content-type: text/javascript'
+
+          echo "--- 未鉴权时 login_status 不得含凭据明文 ---"
+          test "$(curl -s 'http://127.0.0.1:8787/?action=login_status' | grep -c loginInfo)" = "0"
+
+          echo "--- 带管理员 cookie 时应返回明文 ---"
+          test "$(curl -s -b cookie.txt 'http://127.0.0.1:8787/?action=login_status' | grep -c loginInfo)" -ge "1"
+
+          echo "--- 未登录时 /_host/rpc/* 应回 401 ---"
+          curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/_host/rpc/config | grep -q 401
+
+          echo "--- 登录后未配置 RPC 时 push 应回 needConfig ---"
+          curl -s -b cookie.txt -X POST http://127.0.0.1:8787/_host/rpc/push \
+            -H 'content-type: application/json' -d '{"shareUrl":"https://pan.quark.cn/s/x"}' | grep -q needConfig
+
+          echo "--- 数据库文件应已生成 ---"
+          test -s ./data/jxpan.db
+
+          kill $SERVER_PID
+
+  build:
+    needs: smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # 优先用仓库 Variables（日志里不打码，方便排查），退回 Secrets
+          images: ${{ vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
