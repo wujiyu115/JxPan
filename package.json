@@ -1,0 +1,15 @@
+{
+  "name": "jxpan",
+  "version": "1.0.0",
+  "description": "网盘直链解析工具 - 自托管版（Node.js 宿主运行 Cloudflare Worker）",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node test/selftest.mjs"
+  }
+}
