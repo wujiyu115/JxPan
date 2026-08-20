@@ -968,6 +968,60 @@ await check('guard: sanitizeLoginStatus 保留非对象值', async () => {
   assert.equal(out.data.quark.loginInfo, undefined);
 });
 
+// ---- 首页登录门（复用 guardDb 造 admin_token）----
+const { withHomeGate } = await import('../src/home-gate.mjs');
+
+const HTML = { accept: 'text/html,application/xhtml+xml' };
+function pageWorker() {
+  return { async fetch() {
+    return new Response('<html><body>front</body></html>', { headers: { 'content-type': 'text/html' } });
+  } };
+}
+
+await check('home-gate: 未登录访问首页 302 到 /admin', async () => {
+  const db = await guardDb(null);
+  const res = await withHomeGate(pageWorker(), { db })
+    .fetch(new Request('http://x/', { headers: HTML }), {}, {});
+  assert.equal(res.status, 302);
+  assert.equal(res.headers.get('location'), '/admin');
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+});
+
+await check('home-gate: 带 url 参数的首页解析同样被拦', async () => {
+  const db = await guardDb(null);
+  const res = await withHomeGate(pageWorker(), { db })
+    .fetch(new Request('http://x/?url=https%3A%2F%2Fpan.quark.cn%2Fs%2Fabc', { headers: HTML }), {}, {});
+  assert.equal(res.status, 302);
+});
+
+await check('home-gate: 已登录放行', async () => {
+  const db = await guardDb({ token: 'T', expiresAt: Date.now() + 60_000 });
+  const res = await withHomeGate(pageWorker(), { db })
+    .fetch(new Request('http://x/', { headers: { ...HTML, cookie: 'admin_token=T' } }), {}, {});
+  assert.equal(res.status, 200);
+});
+
+await check('home-gate: aria2 回连的 type=down 不受影响', async () => {
+  const db = await guardDb(null);
+  const res = await withHomeGate(pageWorker(), { db })
+    .fetch(new Request('http://x/?url=https%3A%2F%2Fx%2Fs%2Fa&type=down'), {}, {});
+  assert.equal(res.status, 200);
+});
+
+await check('home-gate: XHR（action=）与 /admin、/s/ 不受影响', async () => {
+  const db = await guardDb(null);
+  const gated = withHomeGate(pageWorker(), { db });
+  for (const url of ['http://x/?action=login_status', 'http://x/admin', 'http://x/s/abc']) {
+    const res = await gated.fetch(new Request(url, { headers: HTML }), {}, {});
+    assert.equal(res.status, 200, url);
+  }
+});
+
+await check('home-gate: HOME_REQUIRE_ADMIN=false 时返回原 handler', async () => {
+  const inner = pageWorker();
+  assert.equal(withHomeGate(inner, { db: null, enabled: false }), inner);
+});
+
 await check('_worker.js 可被加载且导出 default.fetch', async () => {
   const path = resolve(import.meta.dirname, '..', '_worker.js');
   const { default: worker } = await import(pathToFileURL(path).href);

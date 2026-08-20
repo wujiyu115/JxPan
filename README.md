@@ -171,6 +171,7 @@ docker compose logs -f
 | `TRUST_PROXY` | `true`           | 是否采信 `X-Forwarded-Proto` / `X-Forwarded-Host` |
 | `PUID`／`PGID` | `1000`           | 数据目录属主，NAS 上写不进数据库时改这里                      |
 | `PROTECT_CREDENTIALS` | `true`   | 见「安全」一节                                     |
+| `HOME_REQUIRE_ADMIN` | `true`    | 未登录后台时首页 302 到 `/admin`，见「安全」一节             |
 | `QR_AUTOSAVE` | `true`           | 扫码凭据自动落库                                    |
 
 Aria2 相关变量见下面第 5 节。完整清单见 `.env.example`。
@@ -257,7 +258,11 @@ curl -b jx.cookie -X POST http://<host>:8787/_host/rpc/test
 
 设 `PROTECT_CREDENTIALS=false` 可恢复成与 Cloudflare 部署一致的行为，**不建议**。
 
-即便有这道加固，也**不要把 JxPan 裸暴露到公网** —— 解析接口本身无鉴权，任何人都能用你的凭据下载。建议放在反代 + HTTP 基本认证或 IP 白名单后面。
+**首页也要求先登录后台**（`HOME_REQUIRE_ADMIN=true`，默认）：没有有效 `admin_token` 时，浏览器打开 `/` 会 302 到 `/admin`。网盘凭据全靠后台录入，没登录过的实例点解析必然失败，与其让人对着报错猜，不如先送去登录。
+
+只拦「浏览器打开首页」（`/` 且 `Accept: text/html`）这一种请求。刻意放过两类：带 `type=`（`type=down` 是 aria2 回连 JxPan 拿文件流的地址，它不可能有 cookie）和带 `action=`（前端 XHR，归上面的脱敏管）。`/admin`、`/s/<code>` 短链、`/_host/*` 都不受影响。想要开放访问就设 `HOME_REQUIRE_ADMIN=false`。
+
+注意这道门**不是完整鉴权** —— `/?url=…&type=down` 和 `/s/<code>` 仍然无鉴权，知道地址的人照样能用你的凭据下载。所以仍然**不要把 JxPan 裸暴露到公网**，建议放在反代 + HTTP 基本认证或 IP 白名单后面。
 
 #### 7. 出站代理与自签证书（可选）
 

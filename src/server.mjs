@@ -8,6 +8,7 @@ import { createRequestHandler } from './http.mjs';
 import { withQrPersistence } from './qr-persist.mjs';
 import { withCredentialGuard } from './guard.mjs';
 import { withHtmlInjection } from './inject.mjs';
+import { withHomeGate } from './home-gate.mjs';
 import { withHostRoutes } from './host-routes.mjs';
 import { initHostConfig } from './host-config.mjs';
 import { logProxyStatus } from './proxy-hints.mjs';
@@ -37,6 +38,7 @@ const env = { ...process.env, jxpan: db };
 //   host-routes /_host/rpc/* 自己处理，不透传给 worker
 //   guard       login_status 凭据脱敏
 //   inject      HTML 里插一行 script
+//   home-gate   未登录后台时首页 302 到 /admin
 //
 // host-routes 刻意放在 guard **内侧**：它在 direct 模式下要内部读一次
 // login_status 拿 Cookie 去拼 aria2 请求头，从内侧发起才不会被自己的脱敏挡住。
@@ -50,6 +52,8 @@ handler = withHostRoutes(handler, {
 });
 handler = withCredentialGuard(handler, { db, enabled: process.env.PROTECT_CREDENTIALS !== 'false' });
 handler = withHtmlInjection(handler, { enabled: process.env.INJECT_RPC_BUTTON !== 'false' });
+// 最外层：命中就直接 302，不浪费下面几层的活
+handler = withHomeGate(handler, { db, enabled: process.env.HOME_REQUIRE_ADMIN !== 'false' });
 
 const server = createServer(createRequestHandler(handler, env, { trustProxy: TRUST_PROXY }));
 server.headersTimeout = 120_000;

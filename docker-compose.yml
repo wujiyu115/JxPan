@@ -37,6 +37,8 @@ services:
 
       # ---- 安全：未带管理员 cookie 时不返回网盘凭据明文 ----
       PROTECT_CREDENTIALS: "true"
+      # 未登录后台时首页 302 到 /admin（type=down、action=、/s/ 不受影响）
+      HOME_REQUIRE_ADMIN: ${HOME_REQUIRE_ADMIN:-true}
 
       # ---- 出站代理（可选，留空即直连）----
       # 配了代理必须同时开 NODE_USE_ENV_PROXY=1，否则 Node 的 fetch 会忽略它。
