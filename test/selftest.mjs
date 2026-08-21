@@ -526,6 +526,79 @@ await check('push: paramUrl 能拆出 url/pwd/id', async () => {
   assert.match(r.rpc[0].body.params[1][0], /pwd=1234/);
 });
 
+await check('push: paramUrl 里的 fid 链原样带进解析和回连链接', async () => {
+  const r = await pushWith({
+    parseReply: { success: true, data: { file_name: 'd.mkv' } },
+    shareHost: 'www.alipan.com', // 恒走 JxPan 链接，好断言回连 URL
+    body: {
+      paramUrl:
+        '/?url=https%3A%2F%2Fwww.alipan.com%2Fs%2Fzzz&fid=L1&fid2=L2&fid3=L3&d=FID&type=down',
+    },
+  });
+  for (const url of [r.parseCalls[0], r.rpc[0].body.params[1][0]]) {
+    const q = new URL(url).searchParams;
+    assert.equal(q.get('fid'), 'L1', url);
+    assert.equal(q.get('fid2'), 'L2', url);
+    assert.equal(q.get('fid3'), 'L3', url);
+    assert.equal(q.get('id'), 'FID', url);
+  }
+});
+
+// 夸克是这个 bug 的实际现场：worker 的 quark 分支拿 fid 链逐级 browseFolder，
+// 再用最后一级当 pdir_fid 调 downloadFileById。丢了链就只查根目录，
+// 报 "在当前文件夹中未找到指定文件"（两级以上目录时自动搜子文件夹也救不回来）。
+await check('push: 夸克多级目录 —— fid 链进解析，直链带 Cookie 推送', async () => {
+  const r = await pushWith({
+    parseReply: {
+      success: true,
+      mode: 'download',
+      data: {
+        file_name: '第01集.mkv',
+        download_url: 'https://quark-cdn/f?sign=1',
+        is_quark_direct_link: true,
+      },
+    },
+    shareHost: 'pan.quark.cn',
+    loginStatus: { success: true, data: { quark: { logged_in: true, loginInfo: { cookie: '__pus=X' } } } },
+    body: {
+      paramUrl:
+        '/?url=https%3A%2F%2Fpan.quark.cn%2Fs%2Fabc&fid=DIR1&fid2=DIR2&d=FILEFID&type=down',
+    },
+  });
+  const q = new URL(r.parseCalls[0]).searchParams;
+  assert.equal(q.get('fid'), 'DIR1');
+  assert.equal(q.get('fid2'), 'DIR2');
+  assert.equal(q.get('id'), 'FILEFID');
+  assert.equal(r.json.data.results[0].via, 'direct');
+  assert.equal(r.rpc[0].body.params[1][0], 'https://quark-cdn/f?sign=1');
+  assert.ok(r.rpc[0].body.params[2].header.includes('Cookie: __pus=X'));
+});
+
+await check('push: pan123_auth 一起透传', async () => {
+  const r = await pushWith({
+    parseReply: { success: true, data: { file_name: 'e.zip' } },
+    body: { paramUrl: '/?url=https%3A%2F%2Fwww.123pan.com%2Fs%2Fzzz&pan123_auth=TK&type=down' },
+  });
+  assert.equal(new URL(r.parseCalls[0]).searchParams.get('pan123_auth'), 'TK');
+});
+
+await check('push: body.fids 摊成 fid/fid1/fid2', async () => {
+  const r = await pushWith({
+    parseReply: { success: true, data: { file_name: 'f.iso' } },
+    shareHost: 'www.alipan.com',
+    body: { shareUrl: 'https://www.alipan.com/s/abc', id: 'F9', fids: ['A', 'B'] },
+  });
+  const q = new URL(r.parseCalls[0]).searchParams;
+  assert.equal(q.get('fid'), 'A');
+  assert.equal(q.get('fid1'), 'B');
+  assert.equal(q.get('id'), 'F9');
+});
+
+await check('push: 没有 fid 时不塞空参数', async () => {
+  const r = await pushWith({ parseReply: { success: true, data: { file_name: 'g.bin' } } });
+  assert.ok(!r.parseCalls[0].includes('fid'), r.parseCalls[0]);
+});
+
 await check('push: 文件名里的路径分隔符被清掉', async () => {
   const r = await pushWith({
     parseReply: { success: true, data: { file_name: '../../etc/passwd' } },
