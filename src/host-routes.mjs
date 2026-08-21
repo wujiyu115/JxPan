@@ -56,21 +56,52 @@ function resolveBaseUrl(request, config) {
   return new URL(request.url).origin;
 }
 
-function buildDownloadUrl(baseUrl, { shareUrl, pwd, fileId }) {
-  const url = new URL('/', `${baseUrl}/`);
+// 多级目录里的文件，worker 靠一条 fid 链逐层进文件夹才能定位到 id：
+// 第一级是 fid，后面是 fid1…fid20（前端 showParseDialog 实际发的是 fid、fid2、fid3…，
+// worker 两种都读）。丢了这条链，worker 只在根目录找 id，就报「未找到指定的文件」。
+const FID_KEYS = ['fid', ...Array.from({ length: 20 }, (_, i) => `fid${i + 1}`)];
+// 123 云盘的 token 也挂在参数链上，丢了拿不到直链
+const PASSTHROUGH_KEYS = [...FID_KEYS, 'pan123_auth'];
+
+function pickPassthrough(query) {
+  const extra = {};
+  for (const key of PASSTHROUGH_KEYS) {
+    const value = query.get(key);
+    if (value) extra[key] = value;
+  }
+  return extra;
+}
+
+// 文件夹链只有顺序有意义，按 worker 的读取顺序摊回 fid/fid1/fid2…
+function fidsToExtra(fids) {
+  const extra = {};
+  const list = (Array.isArray(fids) ? fids : []).filter(Boolean).slice(0, FID_KEYS.length);
+  list.forEach((fid, index) => {
+    extra[FID_KEYS[index]] = String(fid);
+  });
+  return extra;
+}
+
+function applyParams(url, { shareUrl, pwd, fileId, extra }) {
   url.searchParams.set('url', shareUrl);
   if (pwd) url.searchParams.set('pwd', pwd);
   if (fileId) url.searchParams.set('id', fileId);
+  for (const [key, value] of Object.entries(extra ?? {})) {
+    url.searchParams.set(key, value);
+  }
+}
+
+function buildDownloadUrl(baseUrl, target) {
+  const url = new URL('/', `${baseUrl}/`);
+  applyParams(url, target);
   url.searchParams.set('type', 'down');
   return url.toString();
 }
 
 // 内部派发给内层 handler，不走网络
-async function parseShare(inner, env, ctx, request, { shareUrl, pwd, fileId }) {
+async function parseShare(inner, env, ctx, request, target) {
   const url = new URL('/', new URL(request.url).origin);
-  url.searchParams.set('url', shareUrl);
-  if (pwd) url.searchParams.set('pwd', pwd);
-  if (fileId) url.searchParams.set('id', fileId);
+  applyParams(url, target);
   url.searchParams.set('type', 'json');
 
   const headers = new Headers();
@@ -87,13 +118,23 @@ function paramsFromParamUrl(paramUrl) {
   const query = new URL(paramUrl, 'http://jxpan.invalid/').searchParams;
   const shareUrl = query.get('url');
   if (!shareUrl) return null;
-  return { shareUrl, pwd: query.get('pwd') ?? '', id: query.get('id') ?? query.get('d') ?? '' };
+  return {
+    shareUrl,
+    pwd: query.get('pwd') ?? '',
+    id: query.get('id') ?? query.get('d') ?? '',
+    extra: pickPassthrough(query),
+  };
 }
 
 async function handlePush(inner, env, ctx, request, db) {
   const body = await request.json().catch(() => ({}));
 
-  let target = { shareUrl: body.shareUrl?.trim(), pwd: body.pwd ?? '', id: body.id ?? '' };
+  let target = {
+    shareUrl: body.shareUrl?.trim(),
+    pwd: body.pwd ?? '',
+    id: body.id ?? '',
+    extra: fidsToExtra(body.fids),
+  };
   if (!target.shareUrl && body.paramUrl) {
     try {
       target = paramsFromParamUrl(body.paramUrl) ?? target;
@@ -105,12 +146,18 @@ async function handlePush(inner, env, ctx, request, db) {
   if (!shareUrl) return json({ success: false, msg: '缺少 shareUrl' }, 400);
   body.pwd = target.pwd;
   body.id = target.id;
+  const extra = target.extra ?? {};
 
   const { config } = await readConfig(db);
   if (!config.rpc_url) return json({ success: false, msg: '未配置 Aria2 RPC 地址', needConfig: true }, 400);
 
   const pwd = body.pwd ?? '';
-  const parsed = await parseShare(inner, env, ctx, request, { shareUrl, pwd, fileId: body.id ?? '' });
+  const parsed = await parseShare(inner, env, ctx, request, {
+    shareUrl,
+    pwd,
+    fileId: body.id ?? '',
+    extra,
+  });
   if (!parsed?.success) {
     return json({ success: false, msg: `解析失败: ${parsed?.msg ?? '未知错误'}` }, 502);
   }
@@ -145,7 +192,7 @@ async function handlePush(inner, env, ctx, request, db) {
       const header = toAria2Headers(plan.headers);
       if (header.length > 0) options.header = header;
     } else {
-      uri = buildDownloadUrl(baseUrl, { shareUrl, pwd, fileId });
+      uri = buildDownloadUrl(baseUrl, { shareUrl, pwd, fileId, extra });
       // JxPan 代理流未必支持 Range，分片会拿到坏文件
       if (needsSingleConnection(shareUrl)) {
         options.split = '1';
