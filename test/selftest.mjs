@@ -516,6 +516,31 @@ await check('push: 多文件逐个推送并用各自 file_id', async () => {
   assert.equal(r.json.msg, '成功 2/2');
 });
 
+// 夸克的文件夹列表把文件 id 放在 fid 里，且「整个分享只有一个文件」时
+// items.length === 1 —— 老代码这条分支只看 body.id，于是回连链接没有 id，
+// worker 回一整份列表 JSON，aria2 把 JSON 当文件存下来（0 字节任务）。
+await check('push: 单文件条目也从 fid/file_id 取 id', async () => {
+  const r = await pushWith({
+    parseReply: {
+      success: true,
+      mode: 'folder',
+      data: { files: [{ file_name: 'only.xci', fid: 'FIDONLY', id: 'FIDONLY' }] },
+    },
+    shareHost: 'pan.quark.cn',
+  });
+  const uri = r.rpc[0].body.params[1][0];
+  assert.equal(new URL(uri).searchParams.get('id'), 'FIDONLY', uri);
+});
+
+await check('push: 调用方传的 id 优先于条目自带的 id', async () => {
+  const r = await pushWith({
+    parseReply: { success: true, data: { file_name: 'a.mkv', fid: 'ITEMFID' } },
+    shareHost: 'www.alipan.com',
+    body: { shareUrl: 'https://www.alipan.com/s/abc', id: 'CALLER' },
+  });
+  assert.equal(new URL(r.rpc[0].body.params[1][0]).searchParams.get('id'), 'CALLER');
+});
+
 await check('push: paramUrl 能拆出 url/pwd/id', async () => {
   const r = await pushWith({
     parseReply: { success: true, data: { file_name: 'c.iso' } },

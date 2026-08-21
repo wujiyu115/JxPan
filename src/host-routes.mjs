@@ -173,8 +173,11 @@ async function handlePush(inner, env, ctx, request, db) {
   const results = [];
   for (const item of items) {
     const fileName = singleFileOut ?? safeFileName(item.file_name ?? item.name);
-    // 多文件时用各自的 file_id，单文件沿用调用方传进来的 id
-    const fileId = items.length > 1 ? (item.file_id ?? item.id ?? '') : (body.id ?? data.file_id ?? '');
+    // 调用方传了 id 就用它（单文件弹窗推送），否则用条目自己的 id。
+    // 键名各家不一样：夸克文件夹列表用 fid，别家用 file_id / id。
+    // 少了这一步，「整个分享只有一个文件」时回连链接会丢掉 id，
+    // worker 收到没 id 的请求就回一整份文件夹列表 JSON，aria2 把 JSON 当文件存下来。
+    const fileId = body.id || item.file_id || item.fid || item.id || data.file_id || '';
 
     // 能复刻请求头就直推网盘直链（aria2 直连 CDN，不过 JxPan）；
     // 复刻不了就退回推 JxPan 的 type=down 链接，让 worker 自己代理。
