@@ -123,7 +123,7 @@
 
 ### 🐳 Docker 部署（NAS / 自托管）
 
-除 Cloudflare Workers 外，本项目也可以直接跑在 NAS、VPS 或任何装了 Docker 的机器上。解析逻辑（`_worker.js`）完全复用，宿主层用 Node.js 提供 Workers 运行时的等价能力：
+除 Cloudflare Workers 外，本项目也可以直接跑在 NAS、VPS 或任何装了 Docker 的机器上。解析逻辑完全复用：默认加载上游同步的明文源码 `worker-src.js`（可读、可追溯），也可用 `WORKER_PATH` 指回上游的混淆发布物 `_worker.js`。宿主层用 Node.js 提供 Workers 运行时的等价能力：
 
 | Cloudflare 能力 | 自托管替代 |
 | ------------- | ------------------------------------ |
@@ -215,12 +215,12 @@ location / {
 | UC、天翼、123、蓝奏优享 | 真 302 甩给浏览器 | **直链**，裸推即可（浏览器也没发任何特殊头） |
 | 夸克 | 服务端代理 + 请求头 | **直链** + 自动补 `Cookie` / `Referer` / quark-cloud-drive 专用 UA |
 | 光鸭 | 服务端代理 + 请求头 | **直链** + 自动补 `Authorization: Bearer …` |
-| 阿里云盘 | 服务端代理 + 请求头 | 退回 **JxPan 链接** —— 它的请求头构造函数被混淆器做了控制流平坦化，复刻不出来 |
+| 阿里云盘 | 服务端代理 + 请求头 | **直链** + 自动补 `Authorization: Bearer …` / `Referer`（配方取自明文源码 `getAliyunDownloadHeaders`） |
 | 其他 / 未识别 | — | 保守退回 **JxPan 链接**（一定能用） |
 
-夸克和光鸭的凭据从 `login_status` 内部读取，所以**得先扫码登录过**；没有凭据时会自动退回 JxPan 链接而不是让任务 403。推送成功的提示里会写明这次是「直链」还是「经 JxPan 代理」以及原因。
+夸克、光鸭、阿里的凭据从 `login_status` 内部读取，所以**得先扫码登录过**；没有凭据时会自动退回 JxPan 链接而不是让任务 403。推送成功的提示里会写明这次是「直链」还是「经 JxPan 代理」以及原因。
 
-`direct` 强制全部直推（阿里可能 403，自负风险）；`jxpan` 强制全部走 JxPan 链接，兼容性最好但夸克/阿里的流量要过一遍 JxPan。
+`direct` 强制全部直推（没凭据的网盘可能 403，自负风险）；`jxpan` 强制全部走 JxPan 链接，兼容性最好但夸克/阿里/光鸭的流量要过一遍 JxPan。
 
 > ⚠️ **只有退回 JxPan 链接时才需要 `PUBLIC_BASE_URL`** —— 此时 aria2 要用这个地址回连 JxPan 拉文件。
 > 留空则用你当前的浏览器地址，多数情况够了。但 aria2 在**另一个容器或另一台机器**上时不能是 `127.0.0.1`，要填局域网 IP（如 `http://192.168.1.10:8787`）或域名。
@@ -309,7 +309,7 @@ environment:
 
 ```bash
 docker build -t jxpan:test .
-npm test              # D1 垫片 / MD5 补丁 / _worker.js 加载 自检
+npm test              # D1 垫片 / MD5 补丁 / worker 源码加载 自检
 npm start             # 需要 Node >= 22.13
 ```
 

@@ -1,5 +1,8 @@
-// JxPan 自托管入口：把 Cloudflare Worker 跑在 Node.js 上。
+// JxPan 自托管入口：把网盘解析脚本跑在 Node.js 上。
+// 默认用上游同步的明文源码 worker-src.js（可读、可复刻请求头配方）。
+// _worker.js 是上游的混淆发布物，仅当 WORKER_PATH 指向它时才会加载。
 import { createServer } from 'node:http';
+import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { applyWorkersCompat } from './compat.mjs';
@@ -19,7 +22,14 @@ applyWorkersCompat();
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST ?? '0.0.0.0';
 const DB_PATH = process.env.DB_PATH ?? '/data/jxpan.db';
-const WORKER_PATH = process.env.WORKER_PATH ?? resolve(import.meta.dirname, '..', '_worker.js');
+// 明文源码优先；有人拿原仓库单独部署 _worker.js 时仍可指回它
+const WORKER_PATH =
+  process.env.WORKER_PATH ??
+  resolve(
+    import.meta.dirname,
+    '..',
+    existsSync(resolve(import.meta.dirname, '..', 'worker-src.js')) ? 'worker-src.js' : '_worker.js',
+  );
 const TRUST_PROXY = process.env.TRUST_PROXY !== 'false';
 
 const db = openD1(DB_PATH);

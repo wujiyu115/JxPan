@@ -1,11 +1,13 @@
 // 各网盘直链推给 aria2 时需要的请求头。
 //
-// 判断依据是 _worker.js 的 handleResponse() 对每家网盘的处理方式：
+// 配方全部对齐 worker-src.js（上游明文源码）里各家网盘的 getXxxDownloadHeaders()。
+// 早期 _worker.js 是混淆过的，阿里的 header 构造函数被控制流平坦化读不出来，
+// 只能退回推 JxPan 链接；现在有明文源码，直接照抄。
+// 判断依据是 handleResponse() 对每家网盘的处理方式：
 //   走真 302 的（UC / 天翼 / 123 / 蓝奏优享）—— 浏览器拿到裸链就能下，说明直链
 //     自带签名、不需要任何头部，aria2 同理，可以直推。
 //   走 proxyDownload() 的（夸克 / 阿里 / 光鸭）—— 直链必须带 Cookie/Authorization
-//     + Referer + 专用 UA，裸推必然 403。其中夸克和光鸭的 header 构造函数是明文，
-//     能完整复刻；阿里的被控制流平坦化了，读不出来，只能退回推 JxPan 链接。
+//     + Referer + 专用 UA，裸推必然 403。
 // 拿不准的网盘一律退回 JxPan 链接（一定能用），需要时可强制 direct 模式自行尝试。
 
 const QUARK_UA =
@@ -45,6 +47,25 @@ function guangyaHeaders(credential, env) {
   };
 }
 
+const ALIYUN_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+  'Chrome/120.0.0.0 Safari/537.36';
+
+// 对齐 getAliyunDownloadHeaders(config, authorization)：
+// 阿里的 type=down 走 proxyDownload，直链裸推必 403，必须带 Authorization + Referer。
+// 凭据来自 login_status 里 aliyun.loginInfo.authorization（扫码或 env 都会归到这里）。
+function aliyunHeaders(credential, env) {
+  const token = credential?.authorization || env.ALIYUN_AUTHORIZATION || '';
+  if (!token) return null; // 没凭据直推必 403，让调用方退回 JxPan 链接
+  return {
+    Referer: 'https://www.alipan.com/',
+    'User-Agent': env.ALIYUN_USER_AGENT || ALIYUN_UA,
+    Accept: '*/*',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    Authorization: token.startsWith('Bearer ') ? token : `Bearer ${token}`,
+  };
+}
+
 // platform 对应 login_status 响应里的键名
 const PROVIDERS = [
   { name: 'quark', test: /pan\.quark\.cn/i, direct: true, platform: 'quark', headers: quarkHeaders, proxyStream: true },
@@ -53,8 +74,7 @@ const PROVIDERS = [
   { name: 'pan123', test: /123pan\.(?:cn|com)/i, direct: true },
   { name: 'ilanzou', test: /ilanzou\.com/i, direct: true },
   { name: 'guangya', test: /guangyapan\.com|guangyupan\.com/i, direct: true, platform: 'guangya', headers: guangyaHeaders, proxyStream: true },
-  // header 构造函数被混淆器平坦化，复刻不了 -> 只能推 JxPan 链接走服务端代理
-  { name: 'aliyun', test: /alipan\.com|aliyundrive\.com/i, direct: false, proxyStream: true },
+  { name: 'aliyun', test: /alipan\.com|aliyundrive\.com/i, direct: true, platform: 'aliyun', headers: aliyunHeaders, proxyStream: true },
 ];
 
 export function detectProvider(shareUrl) {
@@ -90,8 +110,10 @@ export async function planPush({ inner, env, ctx, request, shareUrl, downloadUrl
     if (mode === 'direct') return { kind: 'direct', headers: {} };
     return { kind: 'jxpan', reason: '未识别的网盘，保守起点走 JxPan 链接' };
   }
-  if (!provider.direct && mode !== 'direct') {
-    return { kind: 'jxpan', reason: `${provider.name} 的直链需要无法复刻的请求头` };
+  // 强制 direct：明知会 403 也照推，把能拼出来的头部带上
+  if (mode === 'direct') {
+    const credential = provider.platform ? await loadCredential(inner, env, ctx, request, provider.platform).catch(() => null) : null;
+    return { kind: 'direct', headers: provider.headers?.(credential, processEnv) ?? {} };
   }
   if (!provider.headers) return { kind: 'direct', headers: {} };
 

@@ -1,5 +1,6 @@
-// 自检：验证 D1 垫片和 MD5 补丁的行为，以及 _worker.js 能否被加载。
+// 自检：验证 D1 垫片和 MD5 补丁的行为，以及 worker 源码能否被加载。
 // 用法: node test/selftest.mjs
+import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
@@ -362,13 +363,28 @@ await check('push(auto): 夸克缺 Cookie 时退回 JxPan 链接', async () => {
   assert.equal(r.rpc[0].body.params[2].split, '1');
 });
 
-await check('push(auto): 阿里请求头复刻不了，恒走 JxPan 链接', async () => {
+await check('push(auto): 阿里有凭据时直推直链并补上 Authorization/Referer', async () => {
   const r = await pushWith({
     parseReply: { success: true, data: { file_name: 'a.mkv', download_url: 'https://ali-cdn/f' } },
     shareHost: 'www.alipan.com',
+    loginStatus: { success: true, data: { aliyun: { logged_in: true, loginInfo: { authorization: 'eyJhbGciOi' } } } },
+  });
+  const header = r.rpc[0].body.params[2].header;
+  assert.equal(r.rpc[0].body.params[1][0], 'https://ali-cdn/f');
+  assert.ok(header.some((h) => h === 'Authorization: Bearer eyJhbGciOi'), `缺 Authorization: ${header}`);
+  assert.ok(header.some((h) => h === 'Referer: https://www.alipan.com/'), `缺 Referer: ${header}`);
+  assert.equal(r.json.data.results[0].via, 'direct');
+});
+
+await check('push(auto): 阿里缺凭据时退回 JxPan 链接', async () => {
+  const r = await pushWith({
+    parseReply: { success: true, data: { file_name: 'a.mkv', download_url: 'https://ali-cdn/f' } },
+    shareHost: 'www.alipan.com',
+    loginStatus: { success: true, data: { aliyun: { logged_in: false, loginInfo: null } } },
   });
   assert.equal(r.json.data.results[0].via, 'jxpan');
-  assert.match(r.json.data.results[0].reason, /请求头/);
+  assert.match(r.json.data.results[0].reason, /凭据/);
+  assert.match(r.rpc[0].body.params[1][0], /^http:\/\/nas:8787\/\?.*type=down/);
   assert.equal(r.rpc[0].body.params[2].split, '1');
 });
 
@@ -393,12 +409,13 @@ await check('push(jxpan): 强制模式下 UC 也走 JxPan 链接', async () => {
   assert.match(r.rpc[0].body.params[1][0], /^http:\/\/nas:8787\//);
 });
 
-await check('push(direct): 强制模式下阿里也直推（不带头部，自负风险）', async () => {
+await check('push(direct): 强制模式下阿里没凭据也裸推直链', async () => {
   const r = await pushWith({
     parseReply: { success: true, data: { file_name: 'a.mkv', download_url: 'https://ali-cdn/f' } },
     shareHost: 'www.alipan.com',
     mode: 'direct',
   });
+  // 没凭据拼不出 Authorization，强制模式下仍然直推，后续 403 由调用方自负
   assert.equal(r.json.data.results[0].via, 'direct');
   assert.equal(r.rpc[0].body.params[1][0], 'https://ali-cdn/f');
 });
@@ -1120,8 +1137,11 @@ await check('home-gate: HOME_REQUIRE_ADMIN=false 时返回原 handler', async ()
   assert.equal(withHomeGate(inner, { db: null, enabled: false }), inner);
 });
 
-await check('_worker.js 可被加载且导出 default.fetch', async () => {
-  const path = resolve(import.meta.dirname, '..', '_worker.js');
+await check('worker-src.js 可被加载且导出 default.fetch', async () => {
+  // 明文源码优先；不存在时（比如上游只同步了 _worker.js）回退
+  const dir = resolve(import.meta.dirname, '..');
+  const plain = resolve(dir, 'worker-src.js');
+  const path = existsSync(plain) ? plain : resolve(dir, '_worker.js');
   const { default: worker } = await import(pathToFileURL(path).href);
   assert.equal(typeof worker?.fetch, 'function');
 });

@@ -9,7 +9,8 @@ WORKDIR /app
 COPY package.json ./
 COPY src ./src
 COPY test ./test
-COPY _worker.js ./
+# worker-src.js 是上游同步的明文源码（默认加载）；_worker.js 是混淆发布物，留作回退
+COPY worker-src.js _worker.js ./
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh && mkdir -p /data
 

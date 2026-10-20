@@ -30,7 +30,7 @@ jobs:
         with:
           node-version: '24'
 
-      - name: 自检（D1 垫片 / MD5 补丁 / 加载 _worker.js）
+      - name: 自检（D1 垫片 / MD5 补丁 / 加载 worker-src.js）
         run: npm test
 
       - name: 启动服务并断言接口
